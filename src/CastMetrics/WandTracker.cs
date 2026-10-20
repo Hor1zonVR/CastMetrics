@@ -122,8 +122,7 @@ internal sealed class WandTracker
     private static bool IsWandName(string name)
     {
         string n = name.ToLowerInvariant();
-        return n.Contains("wand") || n.Contains("staff") ||
-               n.Contains("runemage") || n.Contains("weapon");
+        return n.Contains("wand") || n.Contains("staff");
     }
 
     private static bool IsUiHierarchy(Transform node)
