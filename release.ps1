@@ -105,37 +105,34 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($GameDir)) {
         $instanceRoot = Join-Path $env:LOCALAPPDATA 'OrbusRebornModdingInstances'
-        $candidates = @()
-        if (Test-Path $instanceRoot -PathType Container) {
-            $candidates = @(Get-ChildItem -LiteralPath $instanceRoot -Directory |
-                Where-Object {
-                    Test-Path (Join-Path $_.FullName 'BepInEx\interop\UnityEngine.CoreModule.dll') -PathType Leaf
-                })
+        if (!(Test-Path $instanceRoot -PathType Container)) {
+            throw "RebornManager instance directory not found: $instanceRoot. Use -GameDir 'C:\path\to\your\modded game'."
         }
-        # Compile against Community's readable interop by preference.
-        # Runtime reflection keeps the compiled DLL independent of Assembly-CSharp types.
-        $community = @($candidates | Where-Object {
-            Test-Path (Join-Path $_.FullName 'vrclient.exe') -PathType Leaf
-        })
-        $choices = if ($community.Count -gt 0) { $community } else { $candidates }
-        if ($choices.Count -eq 0) {
-            throw "No generated BepInEx interop found in $instanceRoot. Supply -GameDir 'C:\path\to\your\modded game'."
+
+        # Never prompt on subsequent releases. Prefer the known-good Spades
+        # reference installation, then Community, then any other valid instance.
+        $preferredNames = @('My Orbus Renewed', 'Modded Orbus')
+        $directories = @(Get-ChildItem -LiteralPath $instanceRoot -Directory -ErrorAction Stop |
+            Sort-Object Name)
+        $ordered = @()
+        foreach ($name in $preferredNames) {
+            $matching = @($directories | Where-Object { $_.Name -eq $name })
+            $ordered += $matching
         }
-        if ($choices.Count -eq 1) {
-            $GameDir = $choices[0].FullName
-        } else {
-            Write-Host 'Choose a game used ONLY to read BepInEx build references:' -ForegroundColor Cyan
-            for ($i = 0; $i -lt $choices.Count; $i++) {
-                Write-Host "  [$($i+1)] $($choices[$i].FullName)"
+        $ordered += @($directories | Where-Object { $_.Name -notin $preferredNames })
+
+        $chosen = $null
+        foreach ($candidate in $ordered) {
+            if (Test-Path (Join-Path $candidate.FullName 'BepInEx\interop\UnityEngine.CoreModule.dll') -PathType Leaf) {
+                $chosen = $candidate
+                break
             }
-            $selection = Read-Host 'Enter number'
-            $number = 0
-            if (-not [int]::TryParse($selection, [ref]$number) -or
-                $number -lt 1 -or $number -gt $choices.Count) {
-                throw 'Invalid game selection.'
-            }
-            $GameDir = $choices[$number - 1].FullName
         }
+        if ($null -eq $chosen) {
+            throw "No generated BepInEx interop found in $instanceRoot. Use -GameDir 'C:\path\to\your\modded game'."
+        }
+        $GameDir = $chosen.FullName
+        Write-Host "Auto-selected build references: $GameDir" -ForegroundColor Cyan
     }
 
     $GameDir = [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($GameDir.Trim().Trim('"')))
