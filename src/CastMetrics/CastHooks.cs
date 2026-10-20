@@ -22,6 +22,7 @@ internal static class CastHooks
     internal static bool IsExperimentalSpades { get; private set; }
 
     private static readonly Dictionary<string, int> ProbeCalls = new();
+    private static readonly Dictionary<string, int> ProbeAllCalls = new();
     private static float _nextProbeReport;
     private static int _probeReports;
     private static bool _warnedLocalCheck;
@@ -154,6 +155,7 @@ internal static class CastHooks
             {
                 _harmony!.Patch(target, postfix: new HarmonyMethod(callback));
                 ProbeCalls[name] = 0;
+                ProbeAllCalls[name] = 0;
             }
             catch (Exception ex)
             {
@@ -170,8 +172,11 @@ internal static class CastHooks
     {
         try
         {
-            if (__originalMethod == null || !BelongsToLocalPlayer(__instance)) return;
+            if (__originalMethod == null) return;
             string name = __originalMethod.Name;
+            if (ProbeAllCalls.TryGetValue(name, out int all) && all < 1000000)
+                ProbeAllCalls[name] = all + 1;
+            if (!BelongsToLocalPlayer(__instance)) return;
             if (ProbeCalls.TryGetValue(name, out int count) && count < 1000000)
                 ProbeCalls[name] = count + 1;
         }
@@ -181,12 +186,17 @@ internal static class CastHooks
     internal static void ReportProbeSnapshot(float now)
     {
         if (!IsExperimentalSpades || ProbeCalls.Count == 0 ||
-            _probeReports >= 12 || now < _nextProbeReport) return;
+            _probeReports >= 24 || now < _nextProbeReport) return;
         _nextProbeReport = now + 10f;
         _probeReports++;
-        string counts = string.Join(", ", ProbeCalls.Select(p => p.Key + "=" + p.Value));
+        string counts = string.Join(", ", ProbeCalls.Select(p => p.Key + "=" +
+            (ProbeAllCalls.TryGetValue(p.Key, out int all) ? all : 0) + " total / " + p.Value + " local"));
         Plugin.Logger.LogInfo("[CastMetrics] Spades bnv probe hits in past interval: " + counts);
-        foreach (string key in ProbeCalls.Keys.ToArray()) ProbeCalls[key] = 0;
+        foreach (string key in ProbeCalls.Keys.ToArray())
+        {
+            ProbeCalls[key] = 0;
+            ProbeAllCalls[key] = 0;
+        }
     }
 
     private static Type? FindType(string fullName)

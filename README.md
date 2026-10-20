@@ -25,7 +25,7 @@ git pull
 
 `release.ps1` automatically finds a generated BepInEx installation under `%LOCALAPPDATA%\OrbusRebornModdingInstances` (preferring a Community client for compile references), verifies dependencies, compiles `CastMetrics.dll` locally, commits pending source changes, pushes `main`, and publishes a **stable GitHub Release**. RebornManager then finds `CastMetrics.dll` from its approved live catalogue. **A stable release is public to every RM user**, so use a separate modded test instance for gameplay tests.
 
-The script automatically bumps the patch version (e.g. `v0.1.1` → `v0.1.1`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
+The script automatically bumps the patch version (e.g. `v0.1.2` → `v0.1.2`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
 
 If you have several game installations, pass the exact folder for compiler references:
 
@@ -63,6 +63,14 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 - **DPS:** **not implemented** until damage can be attributed reliably to the local player. If enabled, the HUD displays `DPS: pending attribution`, never invented damage numbers.
 - **HUD:** a lightweight TextMesh attached to your local controller (or a named wand-tip child when available). It now follows in `LateUpdate` every frame, uses the actual VR eye instead of the desktop camera, and **never enumerates all scene transforms**. Billboard facing was inverted based on the supplied Spades recording; verify in VR.
 - All observed events are read-only. The mod doesn't write gameplay state, change combat timings, or inject inputs.
+
+## v0.1.2 test change
+
+The v0.1.1 recording showed the HUD stayed visible while the wand was holstered because it was anchored to the always-tracked right controller. In v0.1.2 the HUD is **hidden by default unless a local named wand/weapon object is detected near the right hand**. The local-rig scan is limited to 1,800 transforms every 1.5 seconds and does not enumerate the world.
+
+**Important:** if Spades doesn't give its actual wand a recognizable object name under the local rig, the HUD will remain hidden even while the wand is equipped. That's intentional to avoid false visibility. The log lines `Local-rig wand-name scan` and `Right-controller children` help identify the real object during the next equipped/unequipped test. `PreviewAtHeadsetWithoutWand=true` explicitly overrides this for testing only.
+
+Spades cast events are still **not verified**. Probe logs now distinguish *all calls* from *locally-owned calls* to reveal whether the candidate methods execute but fail the ownership check. Accurate CPS and DPS require verified hooks.
 
 ## In-game test checklist
 

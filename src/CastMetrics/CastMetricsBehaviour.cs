@@ -1,12 +1,10 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace CastMetrics;
 
 /// <summary>
-/// Fast local-rig-attached VR readout. No scene-wide Transform enumeration.
-/// Follow and billboard every late frame; change text only five times/second.
+/// Frame-accurate VR readout. A tracked controller is not proof that a wand is equipped.
 /// </summary>
 public sealed class CastMetricsBehaviour : MonoBehaviour
 {
@@ -14,12 +12,13 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
 
     private GameObject? _hud;
     private TextMesh? _text;
+    private Transform? _rig;
     private Transform? _eye;
     private Transform? _hand;
-    private Transform? _wandTip;
+    private readonly WandTracker _wand = new();
     private float _nextTextRefresh;
     private float _nextRigBind;
-    private bool _loggedAnchor;
+    private bool _loggedLocalRig;
 
     private void Start()
     {
@@ -47,21 +46,23 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             Plugin.Logger.LogWarning("[CastMetrics] Font fallback: " + ex.Message);
         }
         _hud.SetActive(false);
-        Plugin.Logger.LogInfo("[CastMetrics] Readout created. Fast LateUpdate follow; local-rig binding.");
+        Plugin.Logger.LogInfo("[CastMetrics] Readout created: hides without held-wand anchor.");
     }
 
     private void LateUpdate()
     {
         if (_hud == null || _text == null) return;
-        if (!Plugin.Enabled.Value ||
-            (!Plugin.ShowCasts.Value && !Plugin.ShowDps.Value))
+
+        float now = Time.realtimeSinceStartup;
+        // Keep collecting bounded casting diagnostics even when the HUD is hidden.
+        CastHooks.ReportProbeSnapshot(now);
+        if (!Plugin.Enabled.Value || (!Plugin.ShowCasts.Value && !Plugin.ShowDps.Value))
         {
             SetVisible(false);
             return;
         }
 
-        float now = Time.realtimeSinceStartup;
-        if (_eye == null || _hand == null || now >= _nextRigBind)
+        if (_rig == null || _eye == null || _hand == null || now >= _nextRigBind)
         {
             _nextRigBind = now + 2f;
             BindLocalRig();
@@ -72,18 +73,14 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             return;
         }
 
-        // A fixed VR controller anchor is significantly more reliable than
-        // a global nearest-wand search. Local wand-tip child is preferred.
-        bool hasWand = _wandTip != null && _wandTip.gameObject.activeInHierarchy;
-        Transform? anchor = hasWand ? _wandTip : _hand;
+        _wand.Bind(_rig, _hand, now);
+        Transform? anchor = _wand.HeldAnchor;
         if (anchor == null && !Plugin.DebugPreviewAtHeadset.Value)
         {
             SetVisible(false);
             return;
         }
-
-        if (Plugin.HideWhenIdle.Value &&
-            now - CastWindow.LastCast > Plugin.IdleSeconds.Value)
+        if (Plugin.HideWhenIdle.Value && now - CastWindow.LastCast > Plugin.IdleSeconds.Value)
         {
             SetVisible(false);
             return;
@@ -93,39 +90,26 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
         {
             _nextTextRefresh = now + 0.2f;
             string casts = !CastHooks.HasVerifiedHook
-                ? "Casts/s: pending hook"
+                ? "Casts/s: hook not found"
                 : !CastHooks.HasObservedCast
-                    ? "Casts/s: waiting for events"
-                    : "Casts/s: " +
-                      CastWindow.CastsPerSecond(now, Plugin.WindowSeconds.Value).ToString("0.00") +
+                    ? "Casts/s: awaiting verified event"
+                    : "Casts/s: " + CastWindow.CastsPerSecond(now, Plugin.WindowSeconds.Value).ToString("0.00") +
                       (CastHooks.IsExperimentalSpades ? " (test)" : "");
             const string dps = "DPS: pending attribution";
             _text.text = Plugin.ShowCasts.Value && Plugin.ShowDps.Value
                 ? casts + "\n" + dps
                 : Plugin.ShowCasts.Value ? casts : dps;
-            CastHooks.ReportProbeSnapshot(now);
         }
 
-        Vector3 position;
-        if (anchor != null)
-        {
-            // Local controller/wand axes so the text stays attached during roll.
-            position = anchor.position + anchor.right * Plugin.OffsetX.Value +
-                       anchor.up * Plugin.OffsetY.Value +
-                       anchor.forward * Plugin.OffsetZ.Value;
-        }
-        else
-        {
-            // Explicit opt-in diagnostics only, never a normal HUD fallback.
-            position = _eye.position + _eye.forward * 0.65f - _eye.up * 0.15f;
-        }
-
+        Vector3 position = anchor == null
+            ? _eye.position + _eye.forward * 0.65f - _eye.up * 0.15f
+            : anchor.position + anchor.right * Plugin.OffsetX.Value +
+              anchor.up * Plugin.OffsetY.Value + anchor.forward * Plugin.OffsetZ.Value;
         _hud.transform.position = position;
-        // Original v0.1 TextMesh read backwards in the actual Spades recording.
-        // Reverse the face relative to the eye; keep upright in world space.
         Vector3 toEye = _eye.position - position;
         if (toEye.sqrMagnitude > 0.0001f)
         {
+            // This is the readable orientation from the second VR recording.
             _hud.transform.rotation = Quaternion.LookRotation(toEye, Vector3.up) *
                                       Quaternion.Euler(0f, 180f, 0f);
         }
@@ -138,45 +122,20 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
         GameObject? rig = GameObject.Find("PlayerRigv4");
         if (rig == null)
         {
+            _rig = null;
             _eye = null;
             _hand = null;
-            _wandTip = null;
             return;
         }
-        Transform root = rig.transform;
-        // Must use the headset's stereo eye, not Camera.main (which can be
-        // RebornCam's desktop recording camera).
-        _eye = root.Find("Camera (eye)");
-        _hand = root.Find("Controller (right)") ?? root.Find("Controller (left)");
-        _wandTip = _hand == null ? null : FindLocalWandTip(_hand);
-        if (!_loggedAnchor && _eye != null && _hand != null)
+        _rig = rig.transform;
+        _eye = _rig.Find("Camera (eye)");
+        _hand = _rig.Find("Controller (right)");
+        if (!_loggedLocalRig && _eye != null && _hand != null)
         {
-            _loggedAnchor = true;
-            Plugin.Logger.LogInfo("[CastMetrics] Local eye=" + _eye.name +
-                "; controller=" + _hand.name +
-                "; wand-tip child=" + (_wandTip == null ? "(not found; using controller)" : _wandTip.name) +
-                ". Global wand search disabled.");
+            _loggedLocalRig = true;
+            Plugin.Logger.LogInfo("[CastMetrics] Local VR eye/right hand resolved. " +
+                "Readout requires a separate equipped-wand match.");
         }
-    }
-
-    private static Transform? FindLocalWandTip(Transform hand)
-    {
-        // Inspect only the local controller's descendants, at most 100 nodes.
-        var queue = new Queue<Transform>();
-        queue.Enqueue(hand);
-        int inspected = 0;
-        while (queue.Count != 0 && inspected++ < 100)
-        {
-            Transform t = queue.Dequeue();
-            if (t != hand && t.gameObject.activeInHierarchy)
-            {
-                string n = t.name.ToLowerInvariant();
-                if (n.Contains("wand") && n.Contains("tip")) return t;
-            }
-            int children = Math.Min(t.childCount, 30);
-            for (int i = 0; i < children; i++) queue.Enqueue(t.GetChild(i));
-        }
-        return null;
     }
 
     private void SetVisible(bool visible)
