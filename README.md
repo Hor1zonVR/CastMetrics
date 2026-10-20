@@ -68,7 +68,7 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 
 Version 0.1.3 **overcounted**, because `cgk.lsa()` fires for drawing attempts even when the spell fails recognition. Its logs showed 41 drawing finishes but only 23 spell preparations in one ten-second interval, 36 vs 22 in another, and 29 vs 21 in another.
 
-v0.1.4 instead counts the local Runemage's `prepareSpellCast(int)` event (`cgk.lsk(int)` on Spades), with negative or known Community `spellIdx.NONE` value 28 excluded. `finishSpellCast()`/`cgk.lsa()` remains an **observational counter only**. The logs show a bounded histogram of observed spell IDs, plus cancelled and cast-prepared events.
+v0.1.4 instead counts the local Runemage's `prepareSpellCast(int)` event (`cgk.lsk(int)` on Spades), with negative or verified Community `spellIdx.NONE` value 99 excluded. `finishSpellCast()`/`cgk.lsa()` remains an **observational counter only**. The logs show a bounded histogram of observed spell IDs, plus cancelled and cast-prepared events.
 
 This means casts/s is now designed to represent **successful spell recognition**, not every drawing gesture. It is not a measurement of projectile hits, server confirmation or actual DPS. Confirm in-game that invalid rune drawings do not increase the number, and valid rune drawings do. If a specific spell is skipped, share its name and the ID histogram.
 
