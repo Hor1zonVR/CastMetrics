@@ -6,7 +6,7 @@ using BepInEx.Unity.IL2CPP;
 
 namespace CastMetrics;
 
-[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.5")]
+[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.6")]
 public sealed class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger = null!;
@@ -53,7 +53,7 @@ public sealed class Plugin : BasePlugin
         CastHooks.Install();
         DamageDiagnostics.Install();
         AddComponent<CastMetricsBehaviour>();
-        Log.LogInfo("[CastMetrics] v0.1.5 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
-                    ". Counts recognized spells only; damage callbacks are diagnostic-only.");
+        Log.LogInfo("[CastMetrics] v0.1.6 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
+                    ". Counts timestamp-based recognized spell rate; damage callbacks remain diagnostic-only.");
     }
 }

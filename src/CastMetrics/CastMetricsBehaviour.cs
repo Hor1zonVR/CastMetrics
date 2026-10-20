@@ -94,7 +94,7 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             // Short inactivity resets to exactly zero even if a long smoothing
             // window is configured.
             float perSecond = CastWindow.ActiveCastsPerSecond(now, Plugin.WindowSeconds.Value);
-            string casts = "Cast/s: " + perSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+            string casts = "Cast/s: " + (perSecond <= 0f ? "0" : perSecond.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
 
             // DPS awaits confirmation that combat text is attributable to THIS
             // player. An em dash is not misrepresented as measured zero damage.
