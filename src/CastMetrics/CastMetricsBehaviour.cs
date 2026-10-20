@@ -101,7 +101,8 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             : _camera.transform.position + _camera.transform.forward * 0.65f +
               _camera.transform.up * -0.15f;
         _hud.transform.position = basePos;
-        _hud.transform.rotation = Quaternion.LookRotation(basePos - _camera.transform.position, Vector3.up);
+        // TextMesh's front side should face the local camera rather than point away from it.
+        _hud.transform.rotation = Quaternion.LookRotation(_camera.transform.position - basePos, Vector3.up);
         _hud.transform.localScale = Vector3.one * Plugin.Scale.Value;
         if (!_hud.activeSelf) _hud.SetActive(true);
     }
