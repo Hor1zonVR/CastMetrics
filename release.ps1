@@ -193,7 +193,7 @@ try {
     Assert-Exit 'Getting release commit'
 
     Write-Host "[4/4] Publishing $tag with CastMetrics.dll..." -ForegroundColor Yellow
-    $notes = "CastMetrics $tag: experimental Runemage wand readout. Community cast events require live verification; Spades automatic casts and accurate DPS remain under investigation. Compatible-loader goal for both editions; see README."
+    $notes = "CastMetrics ${tag}: experimental Runemage wand readout. Community cast events require live verification; Spades automatic casts and accurate DPS remain under investigation. Compatible-loader goal for both editions; see README."
     $args = @('release','create',$tag,$dll,'--repo',$repo,'--target',$commit,
               '--title',"CastMetrics $tag",'--notes',$notes)
     if ($Preview) { $args += '--prerelease' }
