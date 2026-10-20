@@ -25,7 +25,7 @@ git pull
 
 `release.ps1` automatically finds a generated BepInEx installation under `%LOCALAPPDATA%\OrbusRebornModdingInstances` (preferring a Community client for compile references), verifies dependencies, compiles `CastMetrics.dll` locally, commits pending source changes, pushes `main`, and publishes a **stable GitHub Release**. RebornManager then finds `CastMetrics.dll` from its approved live catalogue. **A stable release is public to every RM user**, so use a separate modded test instance for gameplay tests.
 
-The script automatically bumps the patch version (e.g. `v0.1.0` → `v0.1.1`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
+The script automatically bumps the patch version (e.g. `v0.1.1` → `v0.1.1`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
 
 If you have several game installations, pass the exact folder for compiler references:
 
@@ -59,9 +59,9 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 ## Experimental implementation status
 
 - **Community:** read-only Harmony postfix on `MagicalActual.Runemage.finishSpellCast()`. This is an *event probe* until in-game validation confirms local-player ownership and completed-cast semantics.
-- **Spades:** obfuscated names; `bnv` is an *unverified candidate*. The plugin logs bounded diagnostics and **does not automatically count casts yet**.
+- **Spades:** the legacy `cec.lkk()` posthook is an **experimental structural match** to Community `PlayerWand.finishSpellCast()`; it may not be used by the current Spades Runemage. The newer `bnv` controller uses read-only counters on eight selected candidate methods; **none of those candidates are counted as spells** before validation. Logs show whether anything fires during real casts.
 - **DPS:** **not implemented** until damage can be attributed reliably to the local player. If enabled, the HUD displays `DPS: pending attribution`, never invented damage numbers.
-- **HUD:** a lightweight TextMesh above a detected nearby wand tip. Binding and VR legibility are not yet verified on either edition.
+- **HUD:** a lightweight TextMesh attached to your local controller (or a named wand-tip child when available). It now follows in `LateUpdate` every frame, uses the actual VR eye instead of the desktop camera, and **never enumerates all scene transforms**. Billboard facing was inverted based on the supplied Spades recording; verify in VR.
 - All observed events are read-only. The mod doesn't write gameplay state, change combat timings, or inject inputs.
 
 ## In-game test checklist
@@ -70,7 +70,7 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 2. Enter either game edition, confirm there is no crash, then inspect `BepInEx\LogOutput.log` for `[CastMetrics]`.
 3. If the wand display isn't visible, set `[Diagnostics] PreviewAtHeadsetWithoutWand = true` in the config and restart to test text rendering independently.
 4. On Community, cast 10 fireballs over about five seconds; compare the displayed event rate to what you actually cast.
-5. On Spades, collect the diagnostic line listing cast-controller candidates — **do not expect working casts/s yet**.
+5. On Spades, cast repeatedly for 20 seconds, then collect `Spades bnv probe hits` and `First LOCAL cast callback` (if any) from the log to validate the obfuscated casting path.
 6. Test rejoining, switching scenes and whether it ever follows somebody else's wand.
 
 Please share logs and screenshots to help validate the cast hook and improve wand attachment before treating the counters as accurate.

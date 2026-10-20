@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using HarmonyLib;
@@ -7,52 +8,62 @@ using UnityEngine;
 namespace CastMetrics;
 
 /// <summary>
-/// Read-only Harmony posthook. Does not change cast arguments, cooldowns or game state.
-/// Community has human-readable method names; Spades requires explicitly verified names.
+/// Read-only posthooks. Community and legacy Spades wand classes have a
+/// matching method order; newer Spades Runemage methods need live validation.
+/// Never alter spell arguments, inputs or game timing.
 /// </summary>
 internal static class CastHooks
 {
     private const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic |
                                        BindingFlags.Instance | BindingFlags.Static;
     private static Harmony? _harmony;
-    private static Transform? _lastWand;
-    internal static Transform? LastWand => _lastWand;
     internal static bool HasVerifiedHook { get; private set; }
+    internal static bool HasObservedCast { get; private set; }
+    internal static bool IsExperimentalSpades { get; private set; }
+
+    private static readonly Dictionary<string, int> ProbeCalls = new();
+    private static float _nextProbeReport;
+    private static int _probeReports;
+    private static bool _warnedLocalCheck;
+    private static bool _loggedFirstCast;
 
     internal static void Install()
     {
+        _harmony = new Harmony("com.horizon.castmetrics.casts");
         Type? community = FindType("MagicalActual.Runemage");
         if (community != null)
         {
-            InstallKnown(community, "finishSpellCast", "Community");
+            InstallKnown(community, "finishSpellCast", "Community Runemage");
             return;
         }
 
-        Plugin.Logger.LogWarning("[CastMetrics] Community Runemage not found. " +
-            "Spades has obfuscated names, so automatic cast counting remains disabled until confirmed.");
-        string typeName = Plugin.SpadesCastType.Value.Trim();
-        string methodName = Plugin.SpadesCastMethod.Value.Trim();
-        if (!string.IsNullOrEmpty(typeName) && !string.IsNullOrEmpty(methodName))
+        IsExperimentalSpades = true;
+        Plugin.Logger.LogInfo("[CastMetrics] Obfuscated Spades runtime detected.");
+        // PlayerWand matches Community's original class member order exactly:
+        // Community PlayerWand.finishSpellCast() -> Spades cec.lkk().
+        // The match does NOT prove this legacy controller handles modern casts.
+        Type? oldWand = FindType("cec");
+        if (oldWand != null)
         {
-            Type? candidate = FindType(typeName);
-            if (candidate != null)
-                InstallKnown(candidate, methodName, "Spades MANUAL EXPERIMENT");
-            else
-                Plugin.Logger.LogWarning("[CastMetrics] Configured Spades cast type was not found: " + typeName);
+            InstallKnown(oldWand, "lkk", "Spades legacy PlayerWand (experimental)");
         }
-        else
+        else Plugin.Logger.LogWarning("[CastMetrics] Spades legacy PlayerWand cec unavailable.");
+
+        // Newer Spades Runemage bnv diverges structurally. Do not count
+        // its obfuscated methods as spells until test evidence confirms one.
+        Type? modern = FindType("bnv");
+        if (modern != null) InstallSpadesProbes(modern);
+
+        // Advanced override for explicit, verified game method mappings.
+        string type = Plugin.SpadesCastType.Value.Trim();
+        string method = Plugin.SpadesCastMethod.Value.Trim();
+        if (type.Length != 0 && method.Length != 0)
         {
-            // Bounded, non-invasive information to help match Spades interop in a future update.
-            Type? probable = FindType("bnv");
-            if (probable != null)
-            {
-                var names = probable.GetMethods(Flags)
-                    .Where(m => !m.IsStatic && m.ReturnType == typeof(void) &&
-                                m.GetParameters().Length == 0 && !m.IsSpecialName)
-                    .Select(m => m.Name).Distinct().Take(30);
-                Plugin.Logger.LogInfo("[CastMetrics] Spades candidate bnv zero-arg methods (NOT confirmed): " +
-                                      string.Join(", ", names));
-            }
+            Type? controller = FindType(type);
+            if (controller != null && !(type == "cec" && method == "lkk"))
+                InstallKnown(controller, method, "Spades manual experiment");
+            else if (controller == null)
+                Plugin.Logger.LogWarning("[CastMetrics] Configured experimental type missing: " + type);
         }
     }
 
@@ -62,24 +73,24 @@ internal static class CastHooks
             .FirstOrDefault(m => m.Name == name && !m.IsStatic &&
                                  m.ReturnType == typeof(void) &&
                                  m.GetParameters().Length == 0);
-        MethodInfo? callback = typeof(CastHooks).GetMethod(nameof(AfterCast), BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo? callback = typeof(CastHooks).GetMethod(nameof(AfterCast),
+            BindingFlags.NonPublic | BindingFlags.Static);
         if (target == null || callback == null)
         {
-            Plugin.Logger.LogWarning("[CastMetrics] Casting signature missing in " + edition + ": " +
-                                      controller.FullName + "." + name + "()");
+            Plugin.Logger.LogWarning("[CastMetrics] Zero-argument cast signature missing: " +
+                controller.FullName + "." + name);
             return;
         }
         try
         {
-            _harmony = new Harmony("com.horizon.castmetrics.cast");
-            _harmony.Patch(target, postfix: new HarmonyMethod(callback));
+            _harmony!.Patch(target, postfix: new HarmonyMethod(callback));
             HasVerifiedHook = true;
-            Plugin.Logger.LogInfo("[CastMetrics] Read-only " + edition + " posthook installed: " +
-                                  controller.FullName + "." + name + "()");
+            Plugin.Logger.LogInfo("[CastMetrics] Read-only " + edition + " posthook: " +
+                                  controller.FullName + "." + name);
         }
         catch (Exception ex)
         {
-            Plugin.Logger.LogWarning("[CastMetrics] Hook rejected; no casting data will be shown: " +
+            Plugin.Logger.LogWarning("[CastMetrics] Cast posthook unavailable: " +
                                       ex.GetType().Name + " " + ex.Message);
         }
     }
@@ -89,61 +100,104 @@ internal static class CastHooks
         try
         {
             if (!Plugin.Enabled.Value) return;
-            // A Harmony call is not proof this belongs to the local player.
-            // This first build is explicitly a cast-event probe and needs live attribution testing.
+            if (!BelongsToLocalPlayer(__instance))
+            {
+                if (!_warnedLocalCheck)
+                {
+                    _warnedLocalCheck = true;
+                    Plugin.Logger.LogInfo("[CastMetrics] Cast callback ignored: instance not under local PlayerRigv4.");
+                }
+                return;
+            }
             CastWindow.Record(Time.realtimeSinceStartup);
-            Transform? wand = GetWand(__instance);
-            if (wand != null) _lastWand = wand;
+            HasObservedCast = true;
+            if (!_loggedFirstCast)
+            {
+                _loggedFirstCast = true;
+                Plugin.Logger.LogInfo("[CastMetrics] First LOCAL cast callback observed (" +
+                    (IsExperimentalSpades ? "Spades experimental" : "Community") +
+                    "). Confirm that each successful fireball produces exactly one event.");
+            }
         }
         catch (Exception ex)
         {
-            Plugin.Logger.LogDebug("[CastMetrics] Posthook observation failed: " + ex.Message);
+            Plugin.Logger.LogDebug("[CastMetrics] Cast callback failed: " + ex.Message);
         }
     }
 
-    private static Transform? GetWand(object instance)
+    private static bool BelongsToLocalPlayer(object instance)
     {
-        foreach (string member in new[] { "wandTip", "playerWand", "wand", "wandtip" })
+        if (instance is not Component component) return false;
+        Transform? node = component.transform;
+        for (int i = 0; node != null && i < 35; i++, node = node.parent)
+            if (string.Equals(node.name, "PlayerRigv4", StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    private static void InstallSpadesProbes(Type controller)
+    {
+        // Bounded observational probes on plausible void() methods.
+        // Only counters, never one log entry per invocation; no gameplay edits.
+        string[] candidates = { "iyw", "iyx", "iyy", "izc", "izd", "ize", "izf", "m" };
+        MethodInfo? callback = typeof(CastHooks).GetMethod(nameof(OnProbe),
+            BindingFlags.NonPublic | BindingFlags.Static);
+        if (callback == null) return;
+        foreach (string name in candidates)
         {
-            object? value = Member(instance, member);
-            Transform? transform = AsTransform(value);
-            if (transform != null) return transform;
-            if (value != null)
+            MethodInfo? target = controller.GetMethods(Flags)
+                .FirstOrDefault(m => m.Name == name && !m.IsStatic &&
+                                     m.ReturnType == typeof(void) &&
+                                     m.GetParameters().Length == 0);
+            if (target == null) continue;
+            try
             {
-                transform = AsTransform(Member(value, "wandTip")) ??
-                            AsTransform(Member(value, "tip")) ??
-                            AsTransform(Member(value, "transform"));
-                if (transform != null) return transform;
+                _harmony!.Patch(target, postfix: new HarmonyMethod(callback));
+                ProbeCalls[name] = 0;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Logger.LogDebug("[CastMetrics] Skipped Spades probe " +
+                    name + ": " + ex.GetType().Name);
             }
         }
-        return AsTransform(Member(instance, "transform"));
+        Plugin.Logger.LogInfo("[CastMetrics] Spades bnv passive method probes: " +
+            string.Join(", ", ProbeCalls.Keys) +
+            ". Reports capped; none count toward casts/s.");
     }
 
-    private static object? Member(object source, string name)
+    private static void OnProbe(object __instance, MethodBase __originalMethod)
     {
         try
         {
-            var type = source.GetType();
-            var property = type.GetProperty(name, Flags);
-            if (property != null) return property.GetValue(source);
-            var field = type.GetField(name, Flags);
-            if (field != null) return field.GetValue(source);
-            var getter = type.GetMethod("get_" + name, Flags, null, Type.EmptyTypes, null);
-            return getter?.Invoke(source, null);
+            if (__originalMethod == null || !BelongsToLocalPlayer(__instance)) return;
+            string name = __originalMethod.Name;
+            if (ProbeCalls.TryGetValue(name, out int count) && count < 1000000)
+                ProbeCalls[name] = count + 1;
         }
-        catch { return null; }
+        catch { }
     }
 
-    private static Transform? AsTransform(object? value) =>
-        value is Transform transform ? transform :
-        value is GameObject go ? go.transform :
-        value is Component component ? component.transform : null;
+    internal static void ReportProbeSnapshot(float now)
+    {
+        if (!IsExperimentalSpades || ProbeCalls.Count == 0 ||
+            _probeReports >= 12 || now < _nextProbeReport) return;
+        _nextProbeReport = now + 10f;
+        _probeReports++;
+        string counts = string.Join(", ", ProbeCalls.Select(p => p.Key + "=" + p.Value));
+        Plugin.Logger.LogInfo("[CastMetrics] Spades bnv probe hits in past interval: " + counts);
+        foreach (string key in ProbeCalls.Keys.ToArray()) ProbeCalls[key] = 0;
+    }
 
     private static Type? FindType(string fullName)
     {
         foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            try { Type? type = assembly.GetType(fullName, false); if (type != null) return type; }
+            try
+            {
+                Type? t = assembly.GetType(fullName, false);
+                if (t != null) return t;
+            }
             catch { }
         }
         return null;
