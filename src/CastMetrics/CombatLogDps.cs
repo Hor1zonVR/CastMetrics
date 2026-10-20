@@ -108,8 +108,14 @@ internal static class CombatLogDps
                 if (headerCount > 0)
                 {
                     var header = new byte[headerCount];
-                    file.ReadExactly(header, 0, header.Length);
-                    string text = Encoding.UTF8.GetString(header);
+                    int headerRead = 0;
+                    while (headerRead < header.Length)
+                    {
+                        int n = file.Read(header, headerRead, header.Length - headerRead);
+                        if (n <= 0) break;
+                        headerRead += n;
+                    }
+                    string text = Encoding.UTF8.GetString(header, 0, headerRead);
                     foreach (string line in text.Split('\n'))
                     {
                         ObserveClassSwitch(line.TrimEnd('\r'));
