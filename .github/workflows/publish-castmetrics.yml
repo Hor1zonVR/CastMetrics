@@ -1,0 +1,120 @@
+name: Publish CastMetrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Preview for testing, stable for RebornManager's catalogue"
+        required: true
+        type: choice
+        default: preview
+        options:
+          - preview
+          - stable
+
+permissions:
+  contents: write
+
+concurrency:
+  group: castmetrics-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate private build reference configuration
+        shell: pwsh
+        env:
+          REFS_REPO: ${{ vars.CASTMETRICS_BUILD_REFS_REPO }}
+          REFS_TOKEN: ${{ secrets.CASTMETRICS_BUILD_REFS_TOKEN }}
+        run: |
+          if ($env:GITHUB_REF -ne 'refs/heads/main') { throw 'Select main.' }
+          if ([string]::IsNullOrWhiteSpace($env:REFS_REPO) -or [string]::IsNullOrWhiteSpace($env:REFS_TOKEN)) {
+            throw 'Set CASTMETRICS_BUILD_REFS_REPO and CASTMETRICS_BUILD_REFS_TOKEN (see README).'
+          }
+          if ($env:REFS_REPO -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid refs repo.' }
+      - name: Retrieve existing private build references
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CASTMETRICS_BUILD_REFS_TOKEN }}
+          REFS_REPO: ${{ vars.CASTMETRICS_BUILD_REFS_REPO }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path .build-refs | Out-Null
+          gh release download refs-v1 --repo $env:REFS_REPO --pattern 'RebornCamBuildRefs.zip' --dir .build-refs
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download private build references.' }
+          $game = Join-Path (Resolve-Path .build-refs).Path 'game'
+          Expand-Archive .build-refs/RebornCamBuildRefs.zip -DestinationPath $game
+          foreach ($name in @(
+            'BepInEx/core/BepInEx.Core.dll', 'BepInEx/core/BepInEx.Unity.IL2CPP.dll',
+            'BepInEx/core/Il2CppInterop.Runtime.dll', 'BepInEx/core/0Harmony.dll',
+            'BepInEx/interop/Il2Cppmscorlib.dll',
+            'BepInEx/interop/UnityEngine.CoreModule.dll',
+            'BepInEx/interop/UnityEngine.TextRenderingModule.dll'
+          )) {
+            if (!(Test-Path (Join-Path $game $name))) { throw "Missing $name" }
+          }
+          "CM_GAME_REFS=$game" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Build one cross-edition DLL
+        shell: pwsh
+        run: |
+          dotnet build src/CastMetrics/CastMetrics.csproj -c Release "-p:GameDir=$env:CM_GAME_REFS"
+          if ($LASTEXITCODE -ne 0) { throw 'Compilation failed; refusing to release.' }
+          if (!(Test-Path 'src/CastMetrics/bin/Release/net6.0/CastMetrics.dll')) { throw 'CastMetrics.dll missing.' }
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          $source = Get-Content src/CastMetrics/Plugin.cs -Raw
+          $match = [regex]::Match($source, '(?s)\[BepInPlugin\(\s*"[^"]+"\s*,\s*"[^"]+"\s*,\s*"(?<v>\d+\.\d+\.\d+)"')
+          if (!$match.Success) { throw 'Missing BepInPlugin version.' }
+          $tag = "v" + $match.Groups['v'].Value
+          $mode = 'create'
+          if ((git tag --list $tag) -eq $tag) {
+            if ((git rev-list -n 1 $tag).Trim() -ne (git rev-parse HEAD).Trim()) { throw 'Version already tagged on older code; bump Plugin.cs.' }
+            $pre = gh release view $tag --repo $env:GITHUB_REPOSITORY --json isPrerelease --jq '.isPrerelease' 2>$null
+            if ($LASTEXITCODE -ne 0 -or $env:CHANNEL -ne 'stable' -or $pre.Trim() -ne 'true') { throw 'Version already published.' }
+            $mode = 'promote'
+          }
+          "tag=$tag" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "mode=$mode" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Publish first release
+        if: steps.version.outputs.mode == 'create'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          $dll = (Resolve-Path 'src/CastMetrics/bin/Release/net6.0/CastMetrics.dll').Path
+          git tag $env:TAG
+          git push origin "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Tag push failed.' }
+          $args = @('release', 'create', $env:TAG, $dll, '--repo', $env:GITHUB_REPOSITORY,
+            '--title', "CastMetrics $env:TAG", '--notes',
+            'Experimental wand HUD and Community cast event probe. Spades casting and damage attribution are not yet verified.',
+            '--verify-tag')
+          if ($env:CHANNEL -eq 'preview') { $args += '--prerelease' }
+          gh @args
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed.' }
+      - name: Promote tested preview to stable for RM
+        if: steps.version.outputs.mode == 'promote'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          $release = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:TAG" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$release.id) { throw 'Cannot find preview release.' }
+          gh api --method PATCH "repos/$env:GITHUB_REPOSITORY/releases/$($release.id)" -F prerelease=false -f make_latest=true
+          if ($LASTEXITCODE -ne 0) { throw 'Promotion failed.' }

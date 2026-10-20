@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.build-refs/
+*.user
+*.suo
+# Do not commit proprietary Orbus or BepInEx-generated assemblies.
+BepInEx/
+interop/
+*.zip
