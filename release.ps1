@@ -156,8 +156,11 @@ try {
     Write-Host "Build references: $GameDir" -ForegroundColor Cyan
     Write-Host 'This script WILL NOT install or change files in that game folder.' -ForegroundColor DarkGray
     Write-Host "Publishing version: $tag" -ForegroundColor Cyan
-    Write-Host 'Mode: STABLE (shown in RebornManager)' -ForegroundColor Yellow
-    if ($Preview) { Write-Host 'Mode: PREVIEW (NOT shown in RebornManager)' -ForegroundColor Yellow }
+    if ($Preview) {
+        Write-Host 'Mode: PREVIEW (NOT shown in RebornManager)' -ForegroundColor Yellow
+    } else {
+        Write-Host 'Mode: STABLE (shown in RebornManager)' -ForegroundColor Yellow
+    }
 
     Write-Host '[1/4] Building DLL locally...' -ForegroundColor Yellow
     & dotnet build $project -c Release --no-incremental "-p:GameDir=$GameDir"
