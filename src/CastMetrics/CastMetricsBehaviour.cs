@@ -92,7 +92,7 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             string casts = !CastHooks.HasVerifiedHook
                 ? "Casts/s: hook not found"
                 : !CastHooks.HasObservedCast
-                    ? "Casts/s: awaiting verified event"
+                    ? "Casts/s: awaiting recognized spell"
                     : "Casts/s: " + CastWindow.CastsPerSecond(now, Plugin.WindowSeconds.Value).ToString("0.00") +
                       (CastHooks.IsExperimentalSpades ? " (test)" : "");
             const string dps = "DPS: pending attribution";

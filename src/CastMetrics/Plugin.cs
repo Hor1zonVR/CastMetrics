@@ -6,7 +6,7 @@ using BepInEx.Unity.IL2CPP;
 
 namespace CastMetrics;
 
-[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.3")]
+[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.4")]
 public sealed class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger = null!;
@@ -28,7 +28,7 @@ public sealed class Plugin : BasePlugin
     {
         Logger = Log;
         Enabled = Config.Bind("General", "Enabled", true, "Enable the floating CastMetrics HUD.");
-        ShowCasts = Config.Bind("Display", "ShowCastsPerSecond", true, "Show verified spell casts per second.");
+        ShowCasts = Config.Bind("Display", "ShowCastsPerSecond", true, "Show recognized Runemage spell preparations per second (not missed drawing gestures).");
         ShowDps = Config.Bind("Display", "ShowDps", false, "Reserved for a future verified, locally attributed DPS source. No DPS is fabricated in v0.1.");
         HideWhenIdle = Config.Bind("Display", "HideWhenIdle", false, "Hide the HUD after IdleSeconds without any verified casts.");
         WindowSeconds = Config.Bind("Metrics", "RollingWindowSeconds", 5f,
@@ -48,11 +48,11 @@ public sealed class Plugin : BasePlugin
         SpadesCastType = Config.Bind("ExperimentalSpades", "CastControllerFullName", "",
             "Do not guess. Full managed type name, only after verifying the obfuscated Runemage class.");
         SpadesCastMethod = Config.Bind("ExperimentalSpades", "SuccessfulCastMethod", "",
-            "Do not guess. Verified zero-argument instance method name for completed casts.");
+            "Do not guess. Legacy manual override is ignored; only recognized spells are counted.");
 
         CastHooks.Install();
         AddComponent<CastMetricsBehaviour>();
-        Log.LogInfo("[CastMetrics] v0.1.3 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
-                    ". Spades cgk.lsa event mapping is experimental.");
+        Log.LogInfo("[CastMetrics] v0.1.4 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
+                    ". Counted spell recognition uses prepareSpellCast / cgk.lsk (experimental).");
     }
 }

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace CastMetrics;
 
-/// <summary>Only completed spell events enter this clock; never count draw gestures or other players' DPS.</summary>
+/// <summary>Only locally recognized Runemage spells enter this clock. Failed drawing gestures and damage are excluded.</summary>
 internal static class CastWindow
 {
     private static readonly Queue<float> Casts = new();

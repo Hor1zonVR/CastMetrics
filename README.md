@@ -25,7 +25,7 @@ git pull
 
 `release.ps1` automatically finds a generated BepInEx installation under `%LOCALAPPDATA%\OrbusRebornModdingInstances` (**preferring `My Orbus Renewed` / Spades, then `Modded Orbus` / Community, then another valid instance; no selection prompt**), verifies dependencies, compiles `CastMetrics.dll` locally, commits pending source changes, pushes `main`, and publishes a **stable GitHub Release**. RebornManager then finds `CastMetrics.dll` from its approved live catalogue. **A stable release is public to every RM user**, so use a separate modded test instance for gameplay tests.
 
-The script automatically bumps the patch version (e.g. `v0.1.3` → `v0.1.3`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
+The script automatically bumps the patch version (e.g. `v0.1.4` → `v0.1.5`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
 
 To override the automatic Spades reference selection, pass another folder for compiler references:
 
@@ -58,11 +58,19 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 
 ## Experimental implementation status
 
-- **Community:** read-only Harmony postfix on `MagicalActual.Runemage.finishSpellCast()`. This is an *event probe* until in-game validation confirms local-player ownership and completed-cast semantics.
-- **Spades:** Community's `Runemage` maps to Spades `cgk` (supported by matching signatures: UInt16/Vector3/Int32 entrypoint, the four-parameter `shootArrow`, and `getRelativePosition`). The experimental completed-cast mapping is `cgk.lsa()`, just before `cgk.lsb(...)` in method order. It is **not yet verified by a live casting test**. Related cgk methods now have bounded read-only diagnostics; the old `bnv` and `cec` probes were misdirected.
+- **Community:** counts `MagicalActual.Runemage.prepareSpellCast(int)` instead of every `finishSpellCast()` drawing attempt. Needs in-game validation.
+- **Spades:** counts `cgk.lsk(int)` (mapped from Community `Runemage.prepareSpellCast(int)`), not `cgk.lsa()` (mapped from `finishSpellCast()`). The v0.1.3 log showed more completed drawing attempts than preparations, confirming why earlier casts/s was inflated. Still experimental: live tests must confirm valid spell IDs match successful rune recognitions.
 - **DPS:** **not implemented** until damage can be attributed reliably to the local player. If enabled, the HUD displays `DPS: pending attribution`, never invented damage numbers.
 - **HUD:** a lightweight TextMesh attached to your local controller (or a named wand-tip child when available). It now follows in `LateUpdate` every frame, uses the actual VR eye instead of the desktop camera, and **never enumerates all scene transforms**. Billboard facing was inverted based on the supplied Spades recording; verify in VR.
 - All observed events are read-only. The mod doesn't write gameplay state, change combat timings, or inject inputs.
+
+## v0.1.4 recognized-spell filtering
+
+Version 0.1.3 **overcounted**, because `cgk.lsa()` fires for drawing attempts even when the spell fails recognition. Its logs showed 41 drawing finishes but only 23 spell preparations in one ten-second interval, 36 vs 22 in another, and 29 vs 21 in another.
+
+v0.1.4 instead counts the local Runemage's `prepareSpellCast(int)` event (`cgk.lsk(int)` on Spades), with negative or known Community `spellIdx.NONE` value 28 excluded. `finishSpellCast()`/`cgk.lsa()` remains an **observational counter only**. The logs show a bounded histogram of observed spell IDs, plus cancelled and cast-prepared events.
+
+This means casts/s is now designed to represent **successful spell recognition**, not every drawing gesture. It is not a measurement of projectile hits, server confirmation or actual DPS. Confirm in-game that invalid rune drawings do not increase the number, and valid rune drawings do. If a specific spell is skipped, share its name and the ID histogram.
 
 ## v0.1.3 casting investigation
 
@@ -82,7 +90,7 @@ Spades cast events are still **not verified**. Probe logs now distinguish *all c
 2. Enter either game edition, confirm there is no crash, then inspect `BepInEx\LogOutput.log` for `[CastMetrics]`.
 3. If the wand display isn't visible, set `[Diagnostics] PreviewAtHeadsetWithoutWand = true` in the config and restart to test text rendering independently.
 4. On Community, cast 10 fireballs over about five seconds; compare the displayed event rate to what you actually cast.
-5. On Spades, cast repeatedly for 20 seconds, then collect `cgk probe last 10s` and `First local casting callback received` (if any) from the log to validate the obfuscated casting path.
+5. On Spades, deliberately draw 10 failed/incomplete runes and then 10 successful fireballs. Collect `Recognized-spell probe last 10s` and `First LOCAL recognized spell` lines to check that only recognized spells increase casts/s.
 6. Test rejoining, switching scenes and whether it ever follows somebody else's wand.
 
 Please share logs and screenshots to help validate the cast hook and improve wand attachment before treating the counters as accurate.
