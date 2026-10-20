@@ -8,24 +8,26 @@ using UnityEngine;
 namespace CastMetrics;
 
 /// <summary>
-/// Read-only posthooks. Community and legacy Spades wand classes have a
-/// matching method order; newer Spades Runemage methods need live validation.
-/// Never alter spell arguments, inputs or game timing.
+/// Read-only Runemage hooks. Spades cgk maps to MagicalActual.Runemage via
+/// multiple uncommon method signatures; the cast event itself is experimental.
 /// </summary>
 internal static class CastHooks
 {
     private const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic |
                                        BindingFlags.Instance | BindingFlags.Static;
+
     private static Harmony? _harmony;
-    internal static bool HasVerifiedHook { get; private set; }
+    internal static bool HasVerifiedHook { get; private set; } // Means hook installed, not event validated.
     internal static bool HasObservedCast { get; private set; }
     internal static bool IsExperimentalSpades { get; private set; }
 
-    private static readonly Dictionary<string, int> ProbeCalls = new();
-    private static readonly Dictionary<string, int> ProbeAllCalls = new();
+    private static readonly Dictionary<string, int> ProbeTotals = new();
+    private static readonly Dictionary<string, int> ProbeLocals = new();
     private static float _nextProbeReport;
     private static int _probeReports;
-    private static bool _warnedLocalCheck;
+    private static int _rawCastCallbacks;
+    private static int _localCastCallbacks;
+    private static bool _warnedOwnership;
     private static bool _loggedFirstCast;
 
     internal static void Install()
@@ -34,65 +36,79 @@ internal static class CastHooks
         Type? community = FindType("MagicalActual.Runemage");
         if (community != null)
         {
-            InstallKnown(community, "finishSpellCast", "Community Runemage");
+            Plugin.Logger.LogInfo("[CastMetrics] Community Runemage found.");
+            InstallCastHook(community, "finishSpellCast", "Community Runemage");
             return;
         }
 
         IsExperimentalSpades = true;
-        Plugin.Logger.LogInfo("[CastMetrics] Obfuscated Spades runtime detected.");
-        // PlayerWand matches Community's original class member order exactly:
-        // Community PlayerWand.finishSpellCast() -> Spades cec.lkk().
-        // The match does NOT prove this legacy controller handles modern casts.
-        Type? oldWand = FindType("cec");
-        if (oldWand != null)
+
+        // Concrete matches from the supplied Spades/Community IL2CPP interop:
+        // Community Runemage.DLSDFPASFD(ushort, Vector3, int) -> cgk.lrd
+        // Community Runemage.shootArrow(Vector3, Vector3, int, int) -> cgk.lsn
+        // Community Runemage.getRelativePosition(Transform, Vector3) -> cgk.lsb
+        // The zero-arg void immediately before getRelativePosition is
+        // Community finishSpellCast -> Spades cgk.lsa (not yet live verified).
+        Type? spadesRunemage = FindType("cgk");
+        if (spadesRunemage == null)
         {
-            InstallKnown(oldWand, "lkk", "Spades legacy PlayerWand (experimental)");
+            Plugin.Logger.LogWarning("[CastMetrics] Spades Runemage cgk not found; cast HUD disabled.");
+            return;
         }
-        else Plugin.Logger.LogWarning("[CastMetrics] Spades legacy PlayerWand cec unavailable.");
 
-        // Newer Spades Runemage bnv diverges structurally. Do not count
-        // its obfuscated methods as spells until test evidence confirms one.
-        Type? modern = FindType("bnv");
-        if (modern != null) InstallSpadesProbes(modern);
+        Plugin.Logger.LogInfo("[CastMetrics] Spades Runemage cgk found. " +
+                              "Trying structurally mapped cgk.lsa cast-completion method.");
+        InstallCastHook(spadesRunemage, "lsa", "Spades Runemage (experimental)");
 
-        // Advanced override for explicit, verified game method mappings.
-        string type = Plugin.SpadesCastType.Value.Trim();
-        string method = Plugin.SpadesCastMethod.Value.Trim();
-        if (type.Length != 0 && method.Length != 0)
+        // Limit diagnostics to casting-path neighbours. All are read-only,
+        // capped counters; none are counted as completed spells.
+        InstallSpadesProbes(spadesRunemage);
+
+        string manualType = Plugin.SpadesCastType.Value.Trim();
+        string manualMethod = Plugin.SpadesCastMethod.Value.Trim();
+        if (manualType.Length > 0 && manualMethod.Length > 0 &&
+            !(manualType == "cgk" && manualMethod == "lsa"))
         {
-            Type? controller = FindType(type);
-            if (controller != null && !(type == "cec" && method == "lkk"))
-                InstallKnown(controller, method, "Spades manual experiment");
-            else if (controller == null)
-                Plugin.Logger.LogWarning("[CastMetrics] Configured experimental type missing: " + type);
+            Type? controller = FindType(manualType);
+            if (controller != null)
+            {
+                // Manual hook is diagnostic too, and may duplicate events.
+                Plugin.Logger.LogWarning("[CastMetrics] Manual experimental cast override enabled: " +
+                                          manualType + "." + manualMethod);
+                InstallCastHook(controller, manualMethod, "Spades manual experiment");
+            }
+            else
+            {
+                Plugin.Logger.LogWarning("[CastMetrics] Configured experimental type missing: " +
+                                          manualType);
+            }
         }
     }
 
-    private static void InstallKnown(Type controller, string name, string edition)
+    private static void InstallCastHook(Type controller, string methodName, string label)
     {
-        MethodInfo? target = controller.GetMethods(Flags)
-            .FirstOrDefault(m => m.Name == name && !m.IsStatic &&
-                                 m.ReturnType == typeof(void) &&
-                                 m.GetParameters().Length == 0);
+        MethodInfo? target = controller.GetMethods(Flags).FirstOrDefault(m =>
+            m.Name == methodName && !m.IsStatic &&
+            m.ReturnType == typeof(void) && m.GetParameters().Length == 0);
         MethodInfo? callback = typeof(CastHooks).GetMethod(nameof(AfterCast),
             BindingFlags.NonPublic | BindingFlags.Static);
         if (target == null || callback == null)
         {
-            Plugin.Logger.LogWarning("[CastMetrics] Zero-argument cast signature missing: " +
-                controller.FullName + "." + name);
+            Plugin.Logger.LogWarning("[CastMetrics] Cast signature unavailable: " +
+                                      controller.FullName + "." + methodName + "()");
             return;
         }
         try
         {
             _harmony!.Patch(target, postfix: new HarmonyMethod(callback));
             HasVerifiedHook = true;
-            Plugin.Logger.LogInfo("[CastMetrics] Read-only " + edition + " posthook: " +
-                                  controller.FullName + "." + name);
+            Plugin.Logger.LogInfo("[CastMetrics] Installed " + label + " postfix: " +
+                                  controller.FullName + "." + methodName + "()");
         }
         catch (Exception ex)
         {
-            Plugin.Logger.LogWarning("[CastMetrics] Cast posthook unavailable: " +
-                                      ex.GetType().Name + " " + ex.Message);
+            Plugin.Logger.LogWarning("[CastMetrics] Cast hook rejected: " +
+                                      ex.GetType().Name + ": " + ex.Message);
         }
     }
 
@@ -100,29 +116,34 @@ internal static class CastHooks
     {
         try
         {
+            _rawCastCallbacks++;
             if (!Plugin.Enabled.Value) return;
             if (!BelongsToLocalPlayer(__instance))
             {
-                if (!_warnedLocalCheck)
+                if (!_warnedOwnership)
                 {
-                    _warnedLocalCheck = true;
-                    Plugin.Logger.LogInfo("[CastMetrics] Cast callback ignored: instance not under local PlayerRigv4.");
+                    _warnedOwnership = true;
+                    Plugin.Logger.LogInfo("[CastMetrics] Cast hook fired but was rejected as non-local. " +
+                                          InstanceDescription(__instance));
                 }
                 return;
             }
-            CastWindow.Record(Time.realtimeSinceStartup);
+
+            _localCastCallbacks++;
             HasObservedCast = true;
+            CastWindow.Record(Time.realtimeSinceStartup);
             if (!_loggedFirstCast)
             {
                 _loggedFirstCast = true;
-                Plugin.Logger.LogInfo("[CastMetrics] First LOCAL cast callback observed (" +
-                    (IsExperimentalSpades ? "Spades experimental" : "Community") +
-                    "). Confirm that each successful fireball produces exactly one event.");
+                Plugin.Logger.LogInfo("[CastMetrics] First local casting callback received via " +
+                    (IsExperimentalSpades ? "cgk.lsa (EXPERIMENTAL)" : "Runemage.finishSpellCast") +
+                    ". Confirm each completed Fireball produces one callback.");
             }
         }
         catch (Exception ex)
         {
-            Plugin.Logger.LogDebug("[CastMetrics] Cast callback failed: " + ex.Message);
+            Plugin.Logger.LogWarning("[CastMetrics] Callback observation failed: " +
+                                     ex.GetType().Name + ": " + ex.Message);
         }
     }
 
@@ -130,42 +151,56 @@ internal static class CastHooks
     {
         if (instance is not Component component) return false;
         Transform? node = component.transform;
-        for (int i = 0; node != null && i < 35; i++, node = node.parent)
+        for (int i = 0; node != null && i < 40; i++, node = node.parent)
+        {
             if (string.Equals(node.name, "PlayerRigv4", StringComparison.OrdinalIgnoreCase))
                 return true;
+        }
         return false;
+    }
+
+    private static string InstanceDescription(object instance)
+    {
+        if (instance is not Component component)
+            return "Managed type=" + (instance?.GetType().FullName ?? "(null)") +
+                   " (not a Unity Component wrapper)";
+        string path = component.name;
+        Transform? node = component.transform.parent;
+        for (int i = 0; node != null && i < 7; i++, node = node.parent)
+            path = node.name + "/" + path;
+        return "Scene path=" + path + " Type=" + instance.GetType().FullName;
     }
 
     private static void InstallSpadesProbes(Type controller)
     {
-        // Bounded observational probes on plausible void() methods.
-        // Only counters, never one log entry per invocation; no gameplay edits.
-        string[] candidates = { "iyw", "iyx", "iyy", "izc", "izd", "ize", "izf", "m" };
+        string[] methods = { "lro", "lrp", "lrs", "lru", "lrw", "lrx", "lry", "lrz",
+                             "lsk", "lsl", "lsm", "lso", "lsp" };
         MethodInfo? callback = typeof(CastHooks).GetMethod(nameof(OnProbe),
             BindingFlags.NonPublic | BindingFlags.Static);
         if (callback == null) return;
-        foreach (string name in candidates)
+        foreach (string name in methods)
         {
-            MethodInfo? target = controller.GetMethods(Flags)
-                .FirstOrDefault(m => m.Name == name && !m.IsStatic &&
-                                     m.ReturnType == typeof(void) &&
-                                     m.GetParameters().Length == 0);
+            MethodInfo? target = controller.GetMethods(Flags).FirstOrDefault(m =>
+                m.Name == name && !m.IsStatic && m.ReturnType == typeof(void) &&
+                (m.GetParameters().Length == 0 ||
+                 (name == "lsk" && m.GetParameters().Length == 1 &&
+                  m.GetParameters()[0].ParameterType == typeof(int))));
             if (target == null) continue;
             try
             {
                 _harmony!.Patch(target, postfix: new HarmonyMethod(callback));
-                ProbeCalls[name] = 0;
-                ProbeAllCalls[name] = 0;
+                ProbeTotals[name] = 0;
+                ProbeLocals[name] = 0;
             }
             catch (Exception ex)
             {
-                Plugin.Logger.LogDebug("[CastMetrics] Skipped Spades probe " +
-                    name + ": " + ex.GetType().Name);
+                Plugin.Logger.LogWarning("[CastMetrics] Cannot inspect cgk." + name +
+                                         ": " + ex.GetType().Name);
             }
         }
-        Plugin.Logger.LogInfo("[CastMetrics] Spades bnv passive method probes: " +
-            string.Join(", ", ProbeCalls.Keys) +
-            ". Reports capped; none count toward casts/s.");
+        Plugin.Logger.LogInfo("[CastMetrics] Spades cgk read-only cast-path probes: " +
+                              string.Join(", ", ProbeTotals.Keys) +
+                              ". Counts reported only every 10 seconds.");
     }
 
     private static void OnProbe(object __instance, MethodBase __originalMethod)
@@ -174,29 +209,35 @@ internal static class CastHooks
         {
             if (__originalMethod == null) return;
             string name = __originalMethod.Name;
-            if (ProbeAllCalls.TryGetValue(name, out int all) && all < 1000000)
-                ProbeAllCalls[name] = all + 1;
-            if (!BelongsToLocalPlayer(__instance)) return;
-            if (ProbeCalls.TryGetValue(name, out int count) && count < 1000000)
-                ProbeCalls[name] = count + 1;
+            if (ProbeTotals.TryGetValue(name, out int total) && total < 1000000)
+                ProbeTotals[name] = total + 1;
+            if (BelongsToLocalPlayer(__instance) &&
+                ProbeLocals.TryGetValue(name, out int local) && local < 1000000)
+                ProbeLocals[name] = local + 1;
         }
         catch { }
     }
 
     internal static void ReportProbeSnapshot(float now)
     {
-        if (!IsExperimentalSpades || ProbeCalls.Count == 0 ||
-            _probeReports >= 24 || now < _nextProbeReport) return;
+        if (!IsExperimentalSpades || _probeReports >= 30 ||
+            now < _nextProbeReport) return;
         _nextProbeReport = now + 10f;
         _probeReports++;
-        string counts = string.Join(", ", ProbeCalls.Select(p => p.Key + "=" +
-            (ProbeAllCalls.TryGetValue(p.Key, out int all) ? all : 0) + " total / " + p.Value + " local"));
-        Plugin.Logger.LogInfo("[CastMetrics] Spades bnv probe hits in past interval: " + counts);
-        foreach (string key in ProbeCalls.Keys.ToArray())
+
+        string summary = string.Join(", ", ProbeTotals.Select(kv =>
+            kv.Key + "=" + kv.Value + " total/" +
+            (ProbeLocals.TryGetValue(kv.Key, out int local) ? local : 0) + " local"));
+        Plugin.Logger.LogInfo("[CastMetrics] cgk probe last 10s: " + summary +
+            "; cgk.lsa callbacks=" + _rawCastCallbacks +
+            " total/" + _localCastCallbacks + " local");
+        foreach (string key in ProbeTotals.Keys.ToArray())
         {
-            ProbeCalls[key] = 0;
-            ProbeAllCalls[key] = 0;
+            ProbeTotals[key] = 0;
+            ProbeLocals[key] = 0;
         }
+        _rawCastCallbacks = 0;
+        _localCastCallbacks = 0;
     }
 
     private static Type? FindType(string fullName)
@@ -205,8 +246,8 @@ internal static class CastHooks
         {
             try
             {
-                Type? t = assembly.GetType(fullName, false);
-                if (t != null) return t;
+                Type? type = assembly.GetType(fullName, false);
+                if (type != null) return type;
             }
             catch { }
         }

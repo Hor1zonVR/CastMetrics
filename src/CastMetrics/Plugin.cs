@@ -6,7 +6,7 @@ using BepInEx.Unity.IL2CPP;
 
 namespace CastMetrics;
 
-[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.2")]
+[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.3")]
 public sealed class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger = null!;
@@ -52,7 +52,7 @@ public sealed class Plugin : BasePlugin
 
         CastHooks.Install();
         AddComponent<CastMetricsBehaviour>();
-        Log.LogInfo("[CastMetrics] v0.1.2 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
-                    ". Spades uses diagnostics until its casting event is verified.");
+        Log.LogInfo("[CastMetrics] v0.1.3 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
+                    ". Spades cgk.lsa event mapping is experimental.");
     }
 }

@@ -25,7 +25,7 @@ git pull
 
 `release.ps1` automatically finds a generated BepInEx installation under `%LOCALAPPDATA%\OrbusRebornModdingInstances` (**preferring `My Orbus Renewed` / Spades, then `Modded Orbus` / Community, then another valid instance; no selection prompt**), verifies dependencies, compiles `CastMetrics.dll` locally, commits pending source changes, pushes `main`, and publishes a **stable GitHub Release**. RebornManager then finds `CastMetrics.dll` from its approved live catalogue. **A stable release is public to every RM user**, so use a separate modded test instance for gameplay tests.
 
-The script automatically bumps the patch version (e.g. `v0.1.2` → `v0.1.3`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
+The script automatically bumps the patch version (e.g. `v0.1.3` → `v0.1.3`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
 
 To override the automatic Spades reference selection, pass another folder for compiler references:
 
@@ -59,18 +59,22 @@ A native in-VR settings interface with visibility toggles, scale and position ad
 ## Experimental implementation status
 
 - **Community:** read-only Harmony postfix on `MagicalActual.Runemage.finishSpellCast()`. This is an *event probe* until in-game validation confirms local-player ownership and completed-cast semantics.
-- **Spades:** the legacy `cec.lkk()` posthook is an **experimental structural match** to Community `PlayerWand.finishSpellCast()`; it may not be used by the current Spades Runemage. The newer `bnv` controller uses read-only counters on eight selected candidate methods; **none of those candidates are counted as spells** before validation. Logs show whether anything fires during real casts.
+- **Spades:** Community's `Runemage` maps to Spades `cgk` (supported by matching signatures: UInt16/Vector3/Int32 entrypoint, the four-parameter `shootArrow`, and `getRelativePosition`). The experimental completed-cast mapping is `cgk.lsa()`, just before `cgk.lsb(...)` in method order. It is **not yet verified by a live casting test**. Related cgk methods now have bounded read-only diagnostics; the old `bnv` and `cec` probes were misdirected.
 - **DPS:** **not implemented** until damage can be attributed reliably to the local player. If enabled, the HUD displays `DPS: pending attribution`, never invented damage numbers.
 - **HUD:** a lightweight TextMesh attached to your local controller (or a named wand-tip child when available). It now follows in `LateUpdate` every frame, uses the actual VR eye instead of the desktop camera, and **never enumerates all scene transforms**. Billboard facing was inverted based on the supplied Spades recording; verify in VR.
 - All observed events are read-only. The mod doesn't write gameplay state, change combat timings, or inject inputs.
 
+## v0.1.3 casting investigation
+
+The previous probes targeted **the wrong Spades classes**, explaining why every result stayed at zero. Comparing the supplied interop reveals that `cgk` is the actual Spades counterpart of Community `MagicalActual.Runemage`. Version 0.1.3 installs a **read-only experimental postfix** on `cgk.lsa()` (aligned with Community `Runemage.finishSpellCast()` by its position immediately preceding `getRelativePosition`). Read-only, bounded probes on related methods now report call totals and local-player ownership. **Treat all cast values as experimental until in-game confirmation**.
+
 ## v0.1.2 test change
 
-The v0.1.1 recording showed the HUD stayed visible while the wand was holstered because it was anchored to the always-tracked right controller. In v0.1.2 the HUD is **hidden by default unless a local named wand/weapon object is detected near the right hand**. The local-rig scan is limited to 1,800 transforms every 1.5 seconds and does not enumerate the world.
+The v0.1.1 recording showed the HUD stayed visible while the wand was holstered because it was anchored to the always-tracked right controller. In v0.1.3 the HUD is **hidden by default unless a local named wand/weapon object is detected near the right hand**. The local-rig scan is limited to 1,800 transforms every 1.5 seconds and does not enumerate the world.
 
 **Important:** if Spades doesn't give its actual wand a recognizable object name under the local rig, the HUD will remain hidden even while the wand is equipped. That's intentional to avoid false visibility. The log lines `Local-rig wand-name scan` and `Right-controller children` help identify the real object during the next equipped/unequipped test. `PreviewAtHeadsetWithoutWand=true` explicitly overrides this for testing only.
 
-Spades cast events are still **not verified**. Probe logs now distinguish *all calls* from *locally-owned calls* to reveal whether the candidate methods execute but fail the ownership check. Accurate CPS and DPS require verified hooks.
+Spades cast events are still **not verified**. Probe logs now distinguish *all calls* from *locally-owned calls* to reveal whether the correctly identified Runemage controller executes relevant methods but fails the ownership check. Accurate CPS and DPS require verified hooks.
 
 ## In-game test checklist
 
@@ -78,7 +82,7 @@ Spades cast events are still **not verified**. Probe logs now distinguish *all c
 2. Enter either game edition, confirm there is no crash, then inspect `BepInEx\LogOutput.log` for `[CastMetrics]`.
 3. If the wand display isn't visible, set `[Diagnostics] PreviewAtHeadsetWithoutWand = true` in the config and restart to test text rendering independently.
 4. On Community, cast 10 fireballs over about five seconds; compare the displayed event rate to what you actually cast.
-5. On Spades, cast repeatedly for 20 seconds, then collect `Spades bnv probe hits` and `First LOCAL cast callback` (if any) from the log to validate the obfuscated casting path.
+5. On Spades, cast repeatedly for 20 seconds, then collect `cgk probe last 10s` and `First local casting callback received` (if any) from the log to validate the obfuscated casting path.
 6. Test rejoining, switching scenes and whether it ever follows somebody else's wand.
 
 Please share logs and screenshots to help validate the cast hook and improve wand attachment before treating the counters as accurate.
