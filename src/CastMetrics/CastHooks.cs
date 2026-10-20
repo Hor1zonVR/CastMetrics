@@ -16,9 +16,10 @@ internal static class CastHooks
 {
     private const BindingFlags Flags = BindingFlags.Public | BindingFlags.NonPublic |
                                        BindingFlags.Instance | BindingFlags.Static;
-    // Community spellIdx enum lists 28 spells followed by NONE.
-    // Some invalid IDs may be negative, so reject those as well.
-    private const int NoneSpellId = 28;
+    // Verified directly from Community interop enum metadata:
+    // FIREBALL=0 ... SHADOWDOTLVL3=27, NONE=99 (NOT 28).
+    // Reject invalid negative IDs as well.
+    private const int NoneSpellId = 99;
 
     private static Harmony? _harmony;
     internal static bool HasVerifiedHook { get; private set; } // Installed, pending gameplay validation.
