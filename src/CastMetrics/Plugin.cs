@@ -6,7 +6,7 @@ using BepInEx.Unity.IL2CPP;
 
 namespace CastMetrics;
 
-[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.4")]
+[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.5")]
 public sealed class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger = null!;
@@ -29,7 +29,7 @@ public sealed class Plugin : BasePlugin
         Logger = Log;
         Enabled = Config.Bind("General", "Enabled", true, "Enable the floating CastMetrics HUD.");
         ShowCasts = Config.Bind("Display", "ShowCastsPerSecond", true, "Show recognized Runemage spell preparations per second (not missed drawing gestures).");
-        ShowDps = Config.Bind("Display", "ShowDps", false, "Reserved for a future verified, locally attributed DPS source. No DPS is fabricated in v0.1.");
+        ShowDps = Config.Bind("Display", "ShowDps", false, "DPS remains hidden by default until player-specific damage is proven. Enabling shows an em dash, never invented damage.");
         HideWhenIdle = Config.Bind("Display", "HideWhenIdle", false, "Hide the HUD after IdleSeconds without any verified casts.");
         WindowSeconds = Config.Bind("Metrics", "RollingWindowSeconds", 5f,
             new ConfigDescription("Cast-rate calculation window.", new AcceptableValueRange<float>(1f, 15f)));
@@ -51,8 +51,9 @@ public sealed class Plugin : BasePlugin
             "Do not guess. Legacy manual override is ignored; only recognized spells are counted.");
 
         CastHooks.Install();
+        DamageDiagnostics.Install();
         AddComponent<CastMetricsBehaviour>();
-        Log.LogInfo("[CastMetrics] v0.1.4 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
-                    ". Counted spell recognition uses prepareSpellCast / cgk.lsk (experimental).");
+        Log.LogInfo("[CastMetrics] v0.1.5 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
+                    ". Counts recognized spells only; damage callbacks are diagnostic-only.");
     }
 }

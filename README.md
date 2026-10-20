@@ -25,7 +25,7 @@ git pull
 
 `release.ps1` automatically finds a generated BepInEx installation under `%LOCALAPPDATA%\OrbusRebornModdingInstances` (**preferring `My Orbus Renewed` / Spades, then `Modded Orbus` / Community, then another valid instance; no selection prompt**), verifies dependencies, compiles `CastMetrics.dll` locally, commits pending source changes, pushes `main`, and publishes a **stable GitHub Release**. RebornManager then finds `CastMetrics.dll` from its approved live catalogue. **A stable release is public to every RM user**, so use a separate modded test instance for gameplay tests.
 
-The script automatically bumps the patch version (e.g. `v0.1.4` → `v0.1.5`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
+The script automatically bumps the patch version (e.g. `v0.1.5` → `v0.1.6`) only when an existing version is already tagged **and there are source changes**. It deliberately stops if the local branch has diverged from GitHub or an expected dependency is missing; it never force-pushes.
 
 To override the automatic Spades reference selection, pass another folder for compiler references:
 
@@ -54,21 +54,33 @@ You can edit that file **with the game closed**, then relaunch. Current v0.1 set
 - `[Metrics] RollingWindowSeconds = 5` — smoothing / responsiveness
 - `[Diagnostics] PreviewAtHeadsetWithoutWand = false` — test whether text renders if the wand transform isn't found
 
+## v0.1.5 HUD polish and DPS investigation
+
+The cast readout is **exactly** `Cast/s: 0` at rest, rising when successfully recognized spells arrive. The old "test", "awaiting event" and other diagnostic prose have been removed from the visual readout. It returns to zero 1.5 seconds after the last recognized cast; active cast-rate smoothing uses at most a 2-second window for better responsiveness.
+
+Accurate DPS is **not yet implemented**. Turning on the existing optional DPS line displays `DPS: —`, never invented damage. A new read-only `DamageDiagnostics` probe observes two actual game callbacks:
+- Community `PlayerCharacter.MonsterHitpointsChanged(int,int,int)`; Spades `cdc.lem(int,int,int)`
+- Community `OverlayCanvasController.ShowCombatText(Monster,CombatTextType,int)`; Spades `cuc.oih(bwh,cub,int)`
+
+Every ten seconds for at most five minutes, logs print bounded counters and sample numeric values. **Neither callback is known to be local-player-only.** Do not feed these values into the HUD until we validate combat-text categories and damage ownership; healing, teammates and other damage sources must not inflate DPS.
+
+**Test:** stand idle near an enemy for 10 seconds; solo attack a normal enemy for 20–30 seconds; then, if possible, observe an enemy being damaged by somebody else without attacking. Send the resulting `DPS source probe` lines so we can compare.
+
 A native in-VR settings interface with visibility toggles, scale and position adjustment is **planned but not implemented**. The CFG is the working v0.1 configuration method.
 
 ## Experimental implementation status
 
 - **Community:** counts `MagicalActual.Runemage.prepareSpellCast(int)` instead of every `finishSpellCast()` drawing attempt. Needs in-game validation.
 - **Spades:** counts `cgk.lsk(int)` (mapped from Community `Runemage.prepareSpellCast(int)`), not `cgk.lsa()` (mapped from `finishSpellCast()`). The v0.1.3 log showed more completed drawing attempts than preparations, confirming why earlier casts/s was inflated. Still experimental: live tests must confirm valid spell IDs match successful rune recognitions.
-- **DPS:** **not implemented** until damage can be attributed reliably to the local player. If enabled, the HUD displays `DPS: pending attribution`, never invented damage numbers.
+- **DPS:** **not implemented** until damage can be attributed reliably to the local player. Read-only, bounded damage-event diagnostics now investigate the correct data source. If enabled, the HUD displays `DPS: —`.
 - **HUD:** a lightweight TextMesh attached to your local controller (or a named wand-tip child when available). It now follows in `LateUpdate` every frame, uses the actual VR eye instead of the desktop camera, and **never enumerates all scene transforms**. Billboard facing was inverted based on the supplied Spades recording; verify in VR.
 - All observed events are read-only. The mod doesn't write gameplay state, change combat timings, or inject inputs.
 
-## v0.1.4 recognized-spell filtering
+## v0.1.5 recognized-spell filtering
 
 Version 0.1.3 **overcounted**, because `cgk.lsa()` fires for drawing attempts even when the spell fails recognition. Its logs showed 41 drawing finishes but only 23 spell preparations in one ten-second interval, 36 vs 22 in another, and 29 vs 21 in another.
 
-v0.1.4 instead counts the local Runemage's `prepareSpellCast(int)` event (`cgk.lsk(int)` on Spades), with negative or verified Community `spellIdx.NONE` value 99 excluded. `finishSpellCast()`/`cgk.lsa()` remains an **observational counter only**. The logs show a bounded histogram of observed spell IDs, plus cancelled and cast-prepared events.
+v0.1.5 instead counts the local Runemage's `prepareSpellCast(int)` event (`cgk.lsk(int)` on Spades), with negative or verified Community `spellIdx.NONE` value 99 excluded. `finishSpellCast()`/`cgk.lsa()` remains an **observational counter only**. The logs show a bounded histogram of observed spell IDs, plus cancelled and cast-prepared events.
 
 This means casts/s is now designed to represent **successful spell recognition**, not every drawing gesture. It is not a measurement of projectile hits, server confirmation or actual DPS. Confirm in-game that invalid rune drawings do not increase the number, and valid rune drawings do. If a specific spell is skipped, share its name and the ID histogram.
 

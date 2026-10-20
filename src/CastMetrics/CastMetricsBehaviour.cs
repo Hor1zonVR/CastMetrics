@@ -56,6 +56,7 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
         float now = Time.realtimeSinceStartup;
         // Keep collecting bounded casting diagnostics even when the HUD is hidden.
         CastHooks.ReportProbeSnapshot(now);
+        DamageDiagnostics.Report(now);
         if (!Plugin.Enabled.Value || (!Plugin.ShowCasts.Value && !Plugin.ShowDps.Value))
         {
             SetVisible(false);
@@ -89,13 +90,15 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
         if (now >= _nextTextRefresh)
         {
             _nextTextRefresh = now + 0.2f;
-            string casts = !CastHooks.HasVerifiedHook
-                ? "Casts/s: hook not found"
-                : !CastHooks.HasObservedCast
-                    ? "Casts/s: awaiting recognized spell"
-                    : "Casts/s: " + CastWindow.CastsPerSecond(now, Plugin.WindowSeconds.Value).ToString("0.00") +
-                      (CastHooks.IsExperimentalSpades ? " (test)" : "");
-            const string dps = "DPS: pending attribution";
+            // The HUD only displays metrics, never experimental hook statuses.
+            // Short inactivity resets to exactly zero even if a long smoothing
+            // window is configured.
+            float perSecond = CastWindow.ActiveCastsPerSecond(now, Plugin.WindowSeconds.Value);
+            string casts = "Cast/s: " + perSecond.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+            // DPS awaits confirmation that combat text is attributable to THIS
+            // player. An em dash is not misrepresented as measured zero damage.
+            const string dps = "DPS: —";
             _text.text = Plugin.ShowCasts.Value && Plugin.ShowDps.Value
                 ? casts + "\n" + dps
                 : Plugin.ShowCasts.Value ? casts : dps;
