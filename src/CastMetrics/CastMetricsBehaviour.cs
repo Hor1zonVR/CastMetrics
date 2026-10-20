@@ -56,7 +56,7 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
         float now = Time.realtimeSinceStartup;
         // Keep collecting bounded casting diagnostics even when the HUD is hidden.
         CastHooks.ReportProbeSnapshot(now);
-        DamageDiagnostics.Report(now);
+        CombatLogDps.Update(now);
         if (!Plugin.Enabled.Value || (!Plugin.ShowCasts.Value && !Plugin.ShowDps.Value))
         {
             SetVisible(false);
@@ -96,9 +96,11 @@ public sealed class CastMetricsBehaviour : MonoBehaviour
             float perSecond = CastWindow.ActiveCastsPerSecond(now, Plugin.WindowSeconds.Value);
             string casts = "Cast/s: " + (perSecond <= 0f ? "0" : perSecond.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture));
 
-            // DPS awaits confirmation that combat text is attributable to THIS
-            // player. An em dash is not misrepresented as measured zero damage.
-            const string dps = "DPS: —";
+            // Real per-character outgoing damage from the game combat log.
+            // Unavailable log/identity is not falsely reported as zero damage.
+            string dps = CombatLogDps.IsReady
+                ? "DPS: " + CombatLogDps.Dps(now).ToString("0", System.Globalization.CultureInfo.InvariantCulture)
+                : "DPS: —";
             _text.text = Plugin.ShowCasts.Value && Plugin.ShowDps.Value
                 ? casts + "\n" + dps
                 : Plugin.ShowCasts.Value ? casts : dps;

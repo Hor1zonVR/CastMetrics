@@ -6,13 +6,15 @@ using BepInEx.Unity.IL2CPP;
 
 namespace CastMetrics;
 
-[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.6")]
+[BepInPlugin("com.horizon.castmetrics", "CastMetrics", "0.1.7")]
 public sealed class Plugin : BasePlugin
 {
     internal static ManualLogSource Logger = null!;
     internal static ConfigEntry<bool> Enabled = null!;
     internal static ConfigEntry<bool> ShowCasts = null!;
     internal static ConfigEntry<bool> ShowDps = null!;
+    internal static ConfigEntry<string> CombatLogPath = null!;
+    internal static ConfigEntry<string> DpsCharacterName = null!;
     internal static ConfigEntry<bool> HideWhenIdle = null!;
     internal static ConfigEntry<float> WindowSeconds = null!;
     internal static ConfigEntry<float> IdleSeconds = null!;
@@ -29,7 +31,21 @@ public sealed class Plugin : BasePlugin
         Logger = Log;
         Enabled = Config.Bind("General", "Enabled", true, "Enable the floating CastMetrics HUD.");
         ShowCasts = Config.Bind("Display", "ShowCastsPerSecond", true, "Show recognized Runemage spell preparations per second (not missed drawing gestures).");
-        ShowDps = Config.Bind("Display", "ShowDps", false, "DPS remains hidden by default until player-specific damage is proven. Enabling shows an em dash, never invented damage.");
+        ShowDps = Config.Bind("Display", "ShowDps", true,
+            "Show your real damage-per-second from OrbusVR combat.log; zero while out of combat.");
+        // Prior versions persisted ShowDps=false. Enable it once when upgrading
+        // to the first real DPS release, then respect future manual toggles.
+        var dpsMigrated = Config.Bind("DPS", "EnabledOnFirstCombatLogRelease", false,
+            "One-time migration: show real DPS for existing CastMetrics installations.");
+        if (!dpsMigrated.Value)
+        {
+            ShowDps.Value = true;
+            dpsMigrated.Value = true;
+        }
+        CombatLogPath = Config.Bind("DPS", "CombatLogPath", "",
+            "Optional override. Blank automatically uses LocalLow\\Orbus Online, LLC\\OrbusVR\\combat.log.");
+        DpsCharacterName = Config.Bind("DPS", "CharacterName", "",
+            "Optional override. Blank detects your character from the first class-switch entry in combat.log.");
         HideWhenIdle = Config.Bind("Display", "HideWhenIdle", false, "Hide the HUD after IdleSeconds without any verified casts.");
         WindowSeconds = Config.Bind("Metrics", "RollingWindowSeconds", 5f,
             new ConfigDescription("Cast-rate calculation window.", new AcceptableValueRange<float>(1f, 15f)));
@@ -51,9 +67,9 @@ public sealed class Plugin : BasePlugin
             "Do not guess. Legacy manual override is ignored; only recognized spells are counted.");
 
         CastHooks.Install();
-        DamageDiagnostics.Install();
+        CombatLogDps.Install();
         AddComponent<CastMetricsBehaviour>();
-        Log.LogInfo("[CastMetrics] v0.1.6 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
-                    ". Counts timestamp-based recognized spell rate; damage callbacks remain diagnostic-only.");
+        Log.LogInfo("[CastMetrics] v0.1.7 loaded; Hook installed=" + CastHooks.HasVerifiedHook +
+                    ". Counts recognized casts and reads real, player-attributed combat.log damage.");
     }
 }
